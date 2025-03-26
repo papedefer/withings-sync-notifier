@@ -1,6 +1,8 @@
+import uvicorn
 from fastapi import FastAPI, Response, Request
 from pydantic import BaseModel
 
+from withings_sync.event_queue import *
 
 class NotifyItem(BaseModel):
     """This fits the notification for appli 1 metrics,
@@ -10,21 +12,35 @@ class NotifyItem(BaseModel):
     """    
     userid: int
     appli: int
-    stardate: int
+    startdate: int
     enddate: int
 
-app = FastAPI()
+def server():
+    """This is the server part of the app"""
+    app = FastAPI()
 
-@app.post("/oauth/access-token")
-def serve_oauth(code: str, state: str | None = None):
-    """This is triggered by the redirect url and shall contains token
+    @app.get("/")
+    def serve_root():
+        return 
 
-    Returns:
-        a fake-ass answer for now
-    """
-    myresp = Response(content=f"Thanks, ${code}, ${state}");
-    return myresp
+    @app.get("/oauth/token")
+    def serve_oauth(code: str, state: str | None = None):
+        """This is triggered by the redirect url and shall contains token
 
-@app.post("/notify")
-def serve_notify(item : NotifyItem):
-    return {"Notify": "Route"}
+        Returns:
+            a fake-ass answer for now
+        """
+        event = ServerEvent(ServerEventMessage.OAUTH_TOKEN, {"code":code, "state":state})
+        server_queue.push(event)
+        return 
+
+    @app.post("/notify")
+    def serve_notify(item : NotifyItem):
+        ServerEvent(ServerEventMessage.NOTIFY, item.model_dump)
+        return {"Notify": "Route"}
+    
+    return app
+
+def start_server(port : int):
+    fast_server = server()
+    uvicorn.run(fast_server, host="0.0.0.0", port=port)

@@ -32,7 +32,7 @@ setup(
         "garth==0.4.46",
         "python-dotenv"],
     entry_points={
-        "console_scripts": ["withings-sync=withings_sync.sync:main"],
+        "console_scripts": ["withings-sync=withings_sync.main:main"],
     },
     zip_safe=False,
     include_package_data=True,

@@ -6,12 +6,17 @@ import os
 import time
 import pkg_resources
 import requests
+import hmac
+
+from withings_sync.event_queue import server_queue
 
 log = logging.getLogger("withings")
 
 HOME = os.environ.get("HOME", ".")
 AUTHORIZE_URL = "https://account.withings.com/oauth2_user/authorize2"
 TOKEN_URL = "https://wbsapi.withings.net/v2/oauth2"
+NOTIFY_URL = "https://wbsapi.withings.net/notify"
+SIGNATURE_URL="https://wbsapi.withings.net/v2/signature"
 GETMEAS_URL = "https://wbsapi.withings.net/measure?action=getmeas"
 
 APP_CONFIG = os.environ.get(
@@ -55,7 +60,10 @@ class WithingsOAuth2:
 
     app_config = user_config = None
 
-    def __init__(self):
+    def __init__(self, server_mode : bool = False):
+        
+        self.server_mode = server_mode
+        
         app_cfg = WithingsConfig(APP_CONFIG)
         self.app_config = app_cfg.config
 
@@ -92,7 +100,7 @@ class WithingsOAuth2:
             "client_id": self.app_config["client_id"],
             "state": "OK",
             "scope": "user.metrics",
-            "redirect_uri": self.app_config["callback_url"],
+            "redirect_uri": self.app_config["callback_url_oauth"] if self.server_mode else self.app_config["callback_url"]
         }
 
         log.warning(
@@ -115,7 +123,11 @@ class WithingsOAuth2:
         log.info(url)
         log.info("")
 
-        authentification_code = input("Token : ")
+        if not self.server_mode:
+            authentification_code = input("Token : ")
+        else:
+            answer = server_queue.pop(block=True, timeout=30)
+            authentification_code = answer.payload["code"]
 
         return authentification_code
 
@@ -129,7 +141,7 @@ class WithingsOAuth2:
             "client_id": self.app_config["client_id"],
             "client_secret": self.app_config["consumer_secret"],
             "code": self.user_config["authentification_code"],
-            "redirect_uri": self.app_config["callback_url"],
+            "redirect_uri": self.app_config["callback_url_oauth"] if self.server_mode else self.app_config["callback_url"],
         }
 
         req = requests.post(TOKEN_URL, params)
@@ -193,8 +205,83 @@ class WithingsOAuth2:
 class WithingsAccount:
     """This class gets measurements from Withings"""
 
-    def __init__(self):
-        self.withings = WithingsOAuth2()
+    def __init__(self, server_mode : bool = False):
+        self.withings = WithingsOAuth2(server_mode)
+
+    def generate_nonce(self):
+        """generate nonce"""
+        params = {
+            "action": "getnonce",
+            "client_id": self.withings.app_config["client_id"],
+            "timestamp": int(time.time())
+        }
+        
+        string_to_hash = ','.join(str(value) for value in params.values())
+        digest = hmac.digest(key=self.withings.app_config["consumer_secret"].encode('utf-8'), msg=string_to_hash, digestmod='sha256')
+        params["signature"] = digest
+        
+        req = requests.post(SIGNATURE_URL, params)
+        resp = req.json()
+        
+        if resp.get("status") == 0:
+            return resp.get("body").get("nonce")
+        else:
+            log.error("Could not get nonce")
+        return None
+
+    def subscribe_notify(self):
+        """subscribe to notifications"""
+        log.info("Subscribe to Notifications")
+
+        headers = {
+            "Authorization": f"Bearer {self.withings.user_config['access_token']}", 
+        }
+        
+        params = {
+            "action": "subscribe",
+            "callbackurl": self.withings.app_config["callback_url_notify"],
+            "appli": 1,
+            "nonce": self.generate_nonce(),
+            "client_id": self.withings.app_config["client_id"],
+        }
+        
+        string_to_hash = ','.join(str(value) for value in params.sub())
+        signature = hmac.digest(key=self.withings.app_config["consumer_secret"].encode('utf-8'), msg= digestmod='sha256')
+        params["signature"] = hmac.digest(key=self.withings.app_config["consumer_secret"].encode('utf-8'), msg=','.join(str(value) for value in params.values()), digestmod='sha256')
+
+        req = requests.post(NOTIFY_URL, headers, params)
+
+        resp = req.json()
+
+        if resp.get("status") == 0:
+            log.info("Subscribed to Notifications")
+        else:
+            log.error("Could not subscribe to Notifications")
+        return None
+
+    def revoke_notify(self):
+        """revoke from notifications"""
+        log.info("revoke from Notifications")
+
+        headers = {
+            "Authorization": f"Bearer {self.withings.user_config['access_token']}", 
+        }
+
+        params = {
+            "action": "revoke",
+            "callbackurl": self.withings.app_config["callback_url_notify"],
+            "appli": 1
+        }
+
+        req = requests.post(NOTIFY_URL, params)
+
+        resp = req.json()
+
+        if resp.get("status") == 0:
+            log.info("revoked from Notifications")
+        else:
+            log.error("Could not revoke from Notifications")
+        return None
 
     def get_lastsync(self):
         """get last sync timestamp"""

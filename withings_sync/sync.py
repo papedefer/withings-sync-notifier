@@ -1,155 +1,15 @@
 """This module syncs measurement data from Withings to Garmin a/o TrainerRoad."""
-import argparse
 import time
-import sys
-import os
-import logging
 import json
-import dotenv
+import logging
+import queue
 
-from datetime import date, datetime
-from importlib.metadata import version
-
-# Load the environment variables from a .env (dotenv) file.
-# This is done prior to importing other modules such that all variables,
-# also the ones accessed in those modules, can be set in the dotenv file.
-dotenv.load_dotenv()
+from withings_sync.cli_parser import ARGS
 
 from withings_sync.withings2 import WithingsAccount
 from withings_sync.garmin import GarminConnect
 from withings_sync.trainerroad import TrainerRoad
 from withings_sync.fit import FitEncoderWeight, FitEncoderBloodPressure
-
-
-def load_variable(env_var, secrets_file):
-    """Load a variable from an environment variable or from a secrets file"""
-    # Try to read the value from the secrets file. Silently fail if the file
-    # cannot be read and use an empty value
-    try:
-        with open(secrets_file, encoding='utf-8') as secret:
-            value = secret.read().strip("\n")
-    except OSError:
-        value = ""
-
-    # Load variable from environment if it exists, otherwise use the
-    # value read from the secrets file.
-    return os.getenv(env_var, value)
-
-
-GARMIN_USERNAME = load_variable('GARMIN_USERNAME', "/run/secrets/garmin_username")
-GARMIN_PASSWORD = load_variable('GARMIN_PASSWORD', "/run/secrets/garmin_password")
-TRAINERROAD_USERNAME = load_variable('TRAINERROAD_USERNAME', "/run/secrets/trainerroad_username")
-TRAINERROAD_PASSWORD = load_variable('TRAINERROAD_PASSWORD', "/run/secrets/trainerroad_password")
-
-
-
-def get_args():
-    """get command-line arguments"""
-    parser = argparse.ArgumentParser(
-        description=(
-            "A tool for synchronisation of Withings "
-            "(ex. Nokia Health Body) to Garmin Connect"
-            " and Trainer Road or to provide a json string."
-        )
-    )
-
-    def date_parser(date_string):
-        return datetime.strptime(date_string, "%Y-%m-%d")
-
-    parser.add_argument(
-        "--garmin-username",
-        "--gu",
-        default=GARMIN_USERNAME,
-        type=str,
-        metavar="GARMIN_USERNAME",
-        help="Username to log in to Garmin Connect.",
-    )
-    parser.add_argument(
-        "--garmin-password",
-        "--gp",
-        default=GARMIN_PASSWORD,
-        type=str,
-        metavar="GARMIN_PASSWORD",
-        help="Password to log in to Garmin Connect.",
-    )
-
-    parser.add_argument(
-        "--trainerroad-username",
-        "--tu",
-        default=TRAINERROAD_USERNAME,
-        type=str,
-        metavar="TRAINERROAD_USERNAME",
-        help="Username to log in to TrainerRoad.",
-    )
-
-    parser.add_argument(
-        "--trainerroad-password",
-        "--tp",
-        default=TRAINERROAD_PASSWORD,
-        type=str,
-        metavar="TRAINERROAD_PASSWORD",
-        help="Password to log in to TrainerRoad.",
-    )
-
-    parser.add_argument(
-        "--fromdate", "-f",
-        type=date_parser,
-        metavar="DATE",
-        help="Date to start syncing from. Ex: 2023-12-20",
-    )
-
-    parser.add_argument(
-        "--todate", "-t",
-        type=date_parser,
-        default=date.today(),
-        metavar="DATE",
-        help="Date for the last sync. Ex: 2023-12-30",
-    )
-
-    parser.add_argument(
-        "--to-fit", "-F",
-        action="store_true",
-        help="Write output file in FIT format.",
-    )
-
-    parser.add_argument(
-        "--to-json",
-        "-J",
-        action="store_true",
-        help="Write output file in JSON format.",
-    )
-
-    parser.add_argument(
-        "--output",
-        "-o",
-        type=str,
-        metavar="BASENAME",
-        help="Write downloaded measurements to file.",
-    )
-
-    parser.add_argument(
-        "--no-upload",
-        action="store_true",
-        help="Won't upload to Garmin Connect or TrainerRoad.",
-    )
-
-    parser.add_argument(
-        "--features",
-        nargs='+',
-        default=[],
-        metavar="BLOOD_PRESSURE",
-        help="Enable Features like BLOOD_PRESSURE."
-    )
-
-    parser.add_argument(
-        "--verbose",
-        "-v",
-        action="store_true",
-        help="Run verbosely."
-    )
-
-    return parser.parse_args()
-
 
 def sync_garmin(fit_file):
     """Sync generated fit file to Garmin Connect"""
@@ -408,26 +268,17 @@ def write_to_file_when_needed(fit_data_weigth, fit_data_blood_pressure, json_dat
                 logging.error("Unable to open output jsonfile!")
 
 
-def sync():
+def sync(withings: WithingsAccount, stardate, enddate):
     """Sync measurements from Withings to Garmin a/o TrainerRoad"""
 
-    # Withings API
-    withings = WithingsAccount()
-
-    if not ARGS.fromdate:
-        startdate = withings.get_lastsync()
-    else:
-        startdate = int(time.mktime(ARGS.fromdate.timetuple()))
-
-    enddate = int(time.mktime(ARGS.todate.timetuple())) + 86399
     logging.info(
         "Fetching measurements from %s to %s",
-        time.strftime("%Y-%m-%d %H:%M", time.localtime(startdate)),
+        time.strftime("%Y-%m-%d %H:%M", time.localtime(stardate)),
         time.strftime("%Y-%m-%d %H:%M", time.localtime(enddate)),
     )
 
     height = withings.get_height()
-    groups = withings.get_measurements(startdate=startdate, enddate=enddate)
+    groups = withings.get_measurements(startdate=stardate, enddate=enddate)
 
     # Only upload if there are measurement returned
     if groups is None or len(groups) == 0:
@@ -489,23 +340,20 @@ def sync():
         logging.info("Skipping upload")
     return 0
 
+def manual_sync():
+    withings = WithingsAccount(server_mode=False)
+    
+    if not ARGS.fromdate:
+        startdate = withings.get_lastsync()
+    else:
+        startdate = int(time.mktime(ARGS.fromdate.timetuple()))
+    enddate = int(time.mktime(ARGS.todate.timetuple())) + 86399
 
-ARGS = get_args()
-
-
-def main():
-    """Main"""
-    logging.basicConfig(
-        level=logging.DEBUG if ARGS.verbose else logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        stream=sys.stdout,
-    )
-    logging.debug("withings-sync script version %s", version("withings-sync"))
-    logging.debug("Script invoked with the following arguments: %s", ARGS)
-
-    if sys.version_info < (3, 7):
-        print("Sorry, requires at least Python3.7 to avoid issues with SSL.")
-        sys.exit(1)
-
-    sync()
-
+    sync(withings, startdate, enddate)
+    
+def continuous_sync():
+    withings = WithingsAccount(server_mode=True)
+    withings.subscribe_notify()
+    while True:
+        withings.wait_for_notify()
+        sync(withings, withings.get_lastsync(), int(time.time()))
