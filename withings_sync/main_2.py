@@ -8,7 +8,7 @@ import signal
 from withings_sync.cli_parser import ARGS
 from withings_sync.server_event import ServerEvent, ServerEventMessage
 from withings_sync.sync import manual_sync, continuous_sync
-from withings_sync.server import run_fastAPI_server
+from withings_sync.server_2 import run_fastAPI_server
 
 
 def start_server(eventQueue : queue.Queue):

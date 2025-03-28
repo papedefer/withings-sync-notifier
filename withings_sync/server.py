@@ -1,46 +1,56 @@
+import logging
 import uvicorn
-from fastapi import FastAPI, Response, Request
-from pydantic import BaseModel
+import queue
+from fastapi import FastAPI, Request, status
 
-from withings_sync.event_queue import *
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from withings_sync.server_event import ServerEvent, ServerEventMessage, NotifyItem
 
-class NotifyItem(BaseModel):
-    """This fits the notification for appli 1 metrics,
-    based of https://developer.withings.com/developer-guide/v3/data-api/keep-user-data-up-to-date#notification-categories
-    Args:
-        BaseModel (_type_): pydantic input
-    """    
-    userid: int
-    appli: int
-    startdate: int
-    enddate: int
-
-def server():
+def generateServer(eventQueue: queue.Queue):
     """This is the server part of the app"""
     app = FastAPI()
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        logging.error("detail", exc.errors())
+        logging.error("body", exc.body)
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content=jsonable_encoder({"detail": exc.errors(), "body": exc.body}),
+        )
 
     @app.get("/")
     def serve_root():
         return 
 
     @app.get("/oauth/token")
-    def serve_oauth(code: str, state: str | None = None):
+    @app.head("/oauth/token")
+    def serve_oauth(code: str, state: str):
         """This is triggered by the redirect url and shall contains token
 
         Returns:
             a fake-ass answer for now
         """
-        event = ServerEvent(ServerEventMessage.OAUTH_TOKEN, {"code":code, "state":state})
-        server_queue.push(event)
+        logging.debug("receiving token !")
+        try:
+            event = ServerEvent(ServerEventMessage.OAUTH_TOKEN, {"code":code, "state":state})
+            eventQueue.put_nowait(event)
+        except queue.Full:
+            logging.error("Queue is full and shouldn't be.")
         return 
-
+    
     @app.post("/notify")
-    def serve_notify(item : NotifyItem):
-        ServerEvent(ServerEventMessage.NOTIFY, item.model_dump)
-        return {"Notify": "Route"}
+    @app.head("/notify")
+    def serve_notify(item : NotifyItem | None = None):
+        logging.debug("receiving notify !")
+        if item:
+            event = ServerEvent(ServerEventMessage.NOTIFY, item.model_dump)
+            eventQueue.put(event)
+        return item
     
     return app
 
-def start_server(port : int):
-    fast_server = server()
-    uvicorn.run(fast_server, host="0.0.0.0", port=port)
+def run_fastAPI_server(port : int, eventQueue: queue.Queue):
+    fastAPI_server = generateServer(eventQueue)
+    uvicorn.run(fastAPI_server, host="0.0.0.0", port=port)

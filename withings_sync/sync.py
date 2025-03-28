@@ -2,14 +2,14 @@
 import time
 import json
 import logging
-import queue
+from queue import Queue
 
 from withings_sync.cli_parser import ARGS
-
-from withings_sync.withings2 import WithingsAccount
+from withings_sync.withings2 import WithingsAccount, WithingsOAuth2
 from withings_sync.garmin import GarminConnect
 from withings_sync.trainerroad import TrainerRoad
 from withings_sync.fit import FitEncoderWeight, FitEncoderBloodPressure
+from withings_sync.server_event import ServerEvent, ServerEventMessage
 
 def sync_garmin(fit_file):
     """Sync generated fit file to Garmin Connect"""
@@ -341,7 +341,7 @@ def sync(withings: WithingsAccount, stardate, enddate):
     return 0
 
 def manual_sync():
-    withings = WithingsAccount(server_mode=False)
+    withings = WithingsAccount()
     
     if not ARGS.fromdate:
         startdate = withings.get_lastsync()
@@ -350,10 +350,37 @@ def manual_sync():
     enddate = int(time.mktime(ARGS.todate.timetuple())) + 86399
 
     sync(withings, startdate, enddate)
-    
-def continuous_sync():
-    withings = WithingsAccount(server_mode=True)
-    withings.subscribe_notify()
-    while True:
-        withings.wait_for_notify()
-        sync(withings, withings.get_lastsync(), int(time.time()))
+
+class MonitoringLoop:
+    def __init__(self, queue : Queue):
+        logging.debug("initializing Monitoring Loop")
+        self.queue = queue
+        self.withingsOauth = WithingsOAuth2(server_mode=True)
+        self.withings = None
+
+    def loop(self):
+        self.isShutingDown = False
+        while not self.isShutingDown:
+            try:
+                event = self.queue.get()
+                self.dispatchEvent(event)
+            except Exception as ex:
+                logging.error("Something bad happened while processing events :", ex)
+
+    def dispatchEvent(self, event : ServerEvent):
+        if event.message == ServerEventMessage.OAUTH_TOKEN:
+            self.withingsOauth.server_wrapper(event.payload["code"])
+            self.withings = WithingsAccount(self.withingsOauth)
+            self.withings.subscribe_notify()
+        elif event.message == ServerEventMessage.NOTIFY:
+            sync(self.withings, event.payload["startdate"], event.payload["enddate"])
+        elif event.message == ServerEventMessage.SHUTDOWN:
+            if self.withings:
+                self.withings.revoke_notify()
+            self.isShutingDown = True
+        else:
+            logging.error("Undefined event")
+
+def continuous_sync(queue : Queue):
+    monitoringLoop = MonitoringLoop(queue)
+    monitoringLoop.loop()

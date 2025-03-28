@@ -41,18 +41,16 @@ def get_args():
     def date_parser(date_string):
         return datetime.strptime(date_string, "%Y-%m-%d")
 
-    parser.add_argument("mode",
-                        nargs='?',
-                        type= str,
-                        choices=["server"],
+    parser.add_argument("--server",
+                        action="store_true",
                         help="Run server mode"
     )
     
-    parser.add_argument("port",
+    parser.add_argument("--port",
                         nargs='?',
                         type= int,
                         default=8000,
-                        help="Choose on which port run server"
+                        help="Choose on which port run server mode"
     )
 
     parser.add_argument(
