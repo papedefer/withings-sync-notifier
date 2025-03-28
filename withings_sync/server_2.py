@@ -1,10 +1,23 @@
 import logging
 import queue
 import asyncio
+import uvicorn
+import dataclass
+
 from fastapi import FastAPI
 from contextlib import  asynccontextmanager
 
+from withings_sync.cli_parser import ARGS
+
+@dataclass
+class TestClass:
+    age:int
+    name:str
+
 def create_FastAPI_app():
+    
+    test = TestClass(42, "Amelie")
+    
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logging.info("HELLO WORLD!")

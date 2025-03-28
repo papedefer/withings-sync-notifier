@@ -8,13 +8,7 @@ import signal
 from withings_sync.cli_parser import ARGS
 from withings_sync.server_event import ServerEvent, ServerEventMessage
 from withings_sync.sync import manual_sync, continuous_sync
-from withings_sync.server import run_fastAPI_server
-
-
-def start_server(eventQueue : queue.Queue):
-    thread = Thread(target=run_fastAPI_server, args={ARGS.port, eventQueue}, daemon=True)
-    thread.start()
-    continuous_sync(eventQueue)
+from withings_sync.server_2 import start_server
     
 def main():
     """Main"""
@@ -30,12 +24,7 @@ def main():
         print("Sorry, requires at least Python3.7 to avoid issues with SSL.")
         sys.exit(1)
 
-    if (ARGS.mode != "server"):
+    if ARGS.server:
+        start_server()
+    else :
         manual_sync()
-    elif (ARGS.mode == "server"):
-        eventQueue = queue.Queue()
-        def gracefull_shutdown(errno, frame):
-            event = ServerEvent(ServerEventMessage.SHUTDOWN, {})
-            eventQueue.put(event)
-        signal.signal(signal.SIGINT, gracefull_shutdown)
-        start_server(eventQueue)
