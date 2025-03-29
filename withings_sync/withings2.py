@@ -67,9 +67,9 @@ class WithingsOAuth2:
         self.user_config = self.user_cfg.config
         
         self.server_mode = server_mode
-        if server_mode == True:
+        if self.server_mode == True:
             self.get_authenticationcode()
-            return 
+            return
 
         if not self.user_config.get("access_token"):
             if not self.user_config.get("authentification_code"):
@@ -87,6 +87,8 @@ class WithingsOAuth2:
 
         self.refresh_accesstoken()
 
+        self.user_cfg.write()
+        
     def __del__(self):
         self.user_cfg.write()
 
@@ -213,6 +215,22 @@ class WithingsAccount:
     def __init__(self, withingsOAuth : WithingsOAuth2 | None = None):
         self.withings = withingsOAuth if withingsOAuth else WithingsOAuth2()
 
+    def renew_token_if_needed(request_function : callable):
+        """request with refresh token"""
+        def wrapper(self, *args, **kwargs):
+            try:
+                return request_function(self, *args, **kwargs)
+            except WithingsException:
+                log.info("Refreshing access token")
+                try:
+                    self.withings.refresh_accesstoken()
+                    return request_function(self, *args, **kwargs)
+                except WithingsException:
+                    log.error("Could not refresh access token")
+                    raise 
+        return wrapper
+        
+    # @renew_token_if_needed
     def subscribe_notify(self):
         """subscribe to notifications"""
         headers = {
@@ -233,7 +251,9 @@ class WithingsAccount:
             log.info("Subscribed to Notifications")
         else:
             log.error("Could not subscribe to Notifications")
+            # raise WithingsException
 
+    # @renew_token_if_needed
     def revoke_notify(self):
         """revoke from notifications"""
         headers = {
@@ -254,6 +274,7 @@ class WithingsAccount:
             log.info("revoked from Notifications")
         else:
             log.error("Could not revoke from Notifications")
+            # raise WithingsException
 
     def get_lastsync(self):
         """get last sync timestamp"""
@@ -267,6 +288,7 @@ class WithingsAccount:
         log.info("Saving Last Sync")
         self.withings.update_config()
 
+    # @renew_token_if_needed
     def get_measurements(self, startdate, enddate):
         """get Withings measurements"""
         log.info("Get Measurements")

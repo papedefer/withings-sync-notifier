@@ -1,14 +1,10 @@
 import logging
 import sys
-from threading import Thread
 from importlib.metadata import version
-import queue
-import signal
 
 from withings_sync.cli_parser import ARGS
-from withings_sync.server_event import ServerEvent, ServerEventMessage
-from withings_sync.sync import manual_sync, continuous_sync
-from withings_sync.server_2 import start_server
+from withings_sync.sync import manual_sync
+from withings_sync.server import start_server
     
 def main():
     """Main"""
